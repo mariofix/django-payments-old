@@ -134,6 +134,12 @@ zero_decimal_currency = [
     "xof",
     "xpf",
 ]
+stripe_event_status_map = {
+    "checkout.session.expired": PaymentStatus.REJECTED,
+    "checkout.session.async_payment_failed": PaymentStatus.REJECTED,
+    "checkout.session.async_payment_succeeded": PaymentStatus.CONFIRMED,
+    "checkout.session.completed": PaymentStatus.CONFIRMED,
+}
 
 
 class StripeProviderV3(BasicProvider):
@@ -143,6 +149,8 @@ class StripeProviderV3(BasicProvider):
 
     :param api_key: Secret key assigned by Stripe.
     :param use_token: Use instance.token instead of instance.pk in client_reference_id
+    :param endpoint_secret: Endpoint Signing Secret.
+    :param secure_endpoint: Validate the recieved data, useful for development.
     """
 
     form_class = PaymentFormV3
@@ -151,11 +159,15 @@ class StripeProviderV3(BasicProvider):
         self,
         api_key,
         use_token=True,
+        endpoint_secret=None,
+        secure_endpoint=True,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.api_key = api_key
         self.use_token = use_token
+        self.endpoint_secret = endpoint_secret
+        self.secure_endpoint = secure_endpoint
 
     def get_form(self, payment, data=None):
         if not payment.transaction_id:
@@ -225,6 +237,8 @@ class StripeProviderV3(BasicProvider):
             session = stripe.checkout.Session.retrieve(payment.transaction_id)
             if session.payment_status == "paid":
                 payment.change_status(PaymentStatus.CONFIRMED)
+                payment.attrs.session = session
+                payment.save()
 
         return payment
 
@@ -248,3 +262,59 @@ class StripeProviderV3(BasicProvider):
         factor = 100 if currency.lower() not in zero_decimal_currency else 1
 
         return int(amount * factor)
+
+    def return_event_payload(self, request):
+        if self.secure_endpoint:
+            if "STRIPE_SIGNATURE" not in request.headers:
+                raise PaymentError.ValidationError(
+                    code=400, message="STRIPE_SIGNATURE not in request.headers"
+                )
+
+            try:
+                return stripe.Webhook.construct_event(
+                    request.body,
+                    request.headers["STRIPE_SIGNATURE"],
+                    self.endpoint_secret,
+                )
+            except ValueError as e:
+                # Invalid payload
+                raise e
+            except stripe.error.SignatureVerificationError as e:
+                # Invalid signature
+                raise e
+        else:
+            return json.loads(request.body)
+
+    def get_token_from_request(self, payment, request):
+        """Return payment token from provider request."""
+        stripe.api_key = self.api_key
+        event = self.return_event_payload(request)
+        event_data = event.get("data", None)
+        if not event_data:
+            raise PaymentError.ValidationError(
+                code=400,
+                message="data is missing from Stripe, check Stripe Dashboard",
+            )
+
+        event_object = event_data.get("object", None)
+        if not event_object:
+            raise PaymentError.ValidationError(
+                code=400,
+                message="object is missing from Stripe.data, check Stripe Dashboard",
+            )
+
+        return event_object.get("client_reference_id", None)
+
+        def process_data(self, payment, request):
+            event = self.return_event_payload(request)
+            event_data = event.get("data")
+            event_object = event_data.get("object")
+            if event_object.type in stripe_event_status_map.keys():
+                # Processing new status
+                payment.change_status(stripe_event_status_map[event.type])
+
+            if not hasattr("events", payment.attrs):
+                payment.attrs.events = []
+
+            payment.attrs.events.append(event)
+            payment.save()
