@@ -255,6 +255,7 @@ class StripeProviderV3(BasicProvider):
             quantity=1,
             price_data=price_data,
         )
+        # https://stacktuts.com/how-to-ignore-none-values-using-asdict-in-dataclasses
         return [asdict(line_item)]
 
     def convert_amount(self, currency, amount):
@@ -305,16 +306,16 @@ class StripeProviderV3(BasicProvider):
 
         return event_object.get("client_reference_id", None)
 
-        def process_data(self, payment, request):
-            event = self.return_event_payload(request)
-            event_data = event.get("data")
-            event_object = event_data.get("object")
-            if event_object.type in stripe_event_status_map.keys():
-                # Processing new status
-                payment.change_status(stripe_event_status_map[event.type])
+    def process_data(self, payment, request):
+        event = self.return_event_payload(request)
+        event_data = event.get("data")
+        event_object = event_data.get("object")
+        if event_object.type in stripe_event_status_map.keys():
+            # Processing new status
+            payment.change_status(stripe_event_status_map[event.type])
 
-            if not hasattr("events", payment.attrs):
-                payment.attrs.events = []
+        if not hasattr("events", payment.attrs):
+            payment.attrs.events = []
 
-            payment.attrs.events.append(event)
-            payment.save()
+        payment.attrs.events.append(event)
+        payment.save()
