@@ -230,6 +230,21 @@ Example::
 
 .. autoclass:: payments.stripe.StripeCardProvider
 
+.. autoclass:: payments.stripe.StripeProviderV3
+
+Example::
+
+      # use sandbox
+      PAYMENT_VARIANTS = {
+          'stripe': (
+              'payments.stripe.StripeProviderV3',
+              {
+                  "api_key": "sk_test_123456",
+                  "endpoint_secret": "whsec_123456",
+              }
+          )
+      }
+
 
 MercadoPago
 -----------
